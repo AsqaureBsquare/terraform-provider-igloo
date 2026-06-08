@@ -18,10 +18,11 @@ func NewAgentResource() resource.Resource {
 }
 
 type AgentResourceModel struct {
-	ID          types.String `tfsdk:"id"`
-	Token       types.String `tfsdk:"token"`
-	ServerURL   types.String `tfsdk:"server_url"`
-	WorkspaceID types.String `tfsdk:"workspace_id"`
+	ID                types.String `tfsdk:"id"`
+	Token             types.String `tfsdk:"token"`
+	ServerURL         types.String `tfsdk:"server_url"`
+	WorkspaceID       types.String `tfsdk:"workspace_id"`
+	NetworkMonitoring types.Bool   `tfsdk:"network_monitoring"`
 }
 
 func (r *AgentResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -71,6 +72,11 @@ resource "kubernetes_deployment" "workspace" {
 				Computed:            true,
 				MarkdownDescription: "The Igloo workspace ID for this workspace.",
 			},
+			"network_monitoring": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Enable network connection monitoring for this workspace. When true, the agent collects TCP connection snapshots and exposes them via the Network Map UI. Defaults to false.",
+			},
 		},
 	}
 }
@@ -112,6 +118,9 @@ func (r *AgentResource) Create(ctx context.Context, req resource.CreateRequest, 
 	data.Token = types.StringValue(token)
 	data.ServerURL = types.StringValue(serverURL)
 	data.WorkspaceID = types.StringValue(workspaceID)
+	if data.NetworkMonitoring.IsNull() || data.NetworkMonitoring.IsUnknown() {
+		data.NetworkMonitoring = types.BoolValue(false)
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
