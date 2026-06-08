@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -23,6 +24,7 @@ type AgentResourceModel struct {
 	ServerURL         types.String `tfsdk:"server_url"`
 	WorkspaceID       types.String `tfsdk:"workspace_id"`
 	NetworkMonitoring types.Bool   `tfsdk:"network_monitoring"`
+	InitScript        types.String `tfsdk:"init_script"`
 }
 
 func (r *AgentResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -33,24 +35,15 @@ func (r *AgentResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 	resp.Schema = schema.Schema{
 		MarkdownDescription: `Exposes the Igloo agent token and workspace metadata injected by the provisioner.
 
-Use this resource to connect your workspace container to the Igloo control plane:
+Use ` + "`init_script`" + ` to start the agent in any container image — no agent pre-baked required:
 
 ` + "```hcl\n" + `resource "igloo_agent" "main" {}
 
-# Pass the agent token to your container:
 resource "kubernetes_deployment" "workspace" {
   ...
-  env {
-    name  = "IGLOO_AGENT_TOKEN"
-    value = igloo_agent.main.token
-  }
-  env {
-    name  = "IGLOO_SERVER_URL"
-    value = igloo_agent.main.server_url
-  }
-  env {
-    name  = "IGLOO_WORKSPACE_ID"
-    value = igloo_agent.main.workspace_id
+  container {
+    image   = var.workspace_image   # any Docker image
+    command = ["sh", "-c", igloo_agent.main.init_script]
   }
 }
 ` + "```",
@@ -75,10 +68,31 @@ resource "kubernetes_deployment" "workspace" {
 			"network_monitoring": schema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Enable network connection monitoring for this workspace. When true, the agent collects TCP connection snapshots and exposes them via the Network Map UI. Defaults to false.",
+				MarkdownDescription: "Enable network connection monitoring. When true, the agent collects TCP connection snapshots and exposes them via the Network Map UI. Defaults to false.",
+			},
+			"init_script": schema.StringAttribute{
+				Computed:            true,
+				Sensitive:           true,
+				MarkdownDescription: "Shell script that downloads and starts the Igloo agent. Use as the container command to support any Docker image without pre-baking the agent binary.",
 			},
 		},
 	}
+}
+
+func buildInitScript(serverURL, token, workspaceID string, networkMonitoring bool) string {
+	netmap := "false"
+	if networkMonitoring {
+		netmap = "true"
+	}
+	return fmt.Sprintf(`#!/bin/sh
+set -e
+export IGLOO_SERVER_URL=%q
+export IGLOO_AGENT_TOKEN=%q
+export IGLOO_WORKSPACE_ID=%q
+export IGLOO_NETMAP_ENABLED=%q
+curl -fsSL "$IGLOO_SERVER_URL/downloads/igloo-agent-linux-amd64" -o /tmp/igloo-agent
+chmod +x /tmp/igloo-agent
+exec /tmp/igloo-agent`, serverURL, token, workspaceID, netmap)
 }
 
 func (r *AgentResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -93,34 +107,30 @@ func (r *AgentResource) Create(ctx context.Context, req resource.CreateRequest, 
 	workspaceID := os.Getenv("IGLOO_WORKSPACE_ID")
 
 	if token == "" {
-		resp.Diagnostics.AddError(
-			"Missing IGLOO_AGENT_TOKEN",
-			"The IGLOO_AGENT_TOKEN environment variable must be set. It is injected automatically by the Igloo provisioner.",
-		)
+		resp.Diagnostics.AddError("Missing IGLOO_AGENT_TOKEN",
+			"The IGLOO_AGENT_TOKEN environment variable must be set. It is injected automatically by the Igloo provisioner.")
 		return
 	}
 	if serverURL == "" {
-		resp.Diagnostics.AddError(
-			"Missing IGLOO_SERVER_URL",
-			"The IGLOO_SERVER_URL environment variable must be set. It is injected automatically by the Igloo provisioner.",
-		)
+		resp.Diagnostics.AddError("Missing IGLOO_SERVER_URL",
+			"The IGLOO_SERVER_URL environment variable must be set. It is injected automatically by the Igloo provisioner.")
 		return
 	}
 	if workspaceID == "" {
-		resp.Diagnostics.AddError(
-			"Missing IGLOO_WORKSPACE_ID",
-			"The IGLOO_WORKSPACE_ID environment variable must be set. It is injected automatically by the Igloo provisioner.",
-		)
+		resp.Diagnostics.AddError("Missing IGLOO_WORKSPACE_ID",
+			"The IGLOO_WORKSPACE_ID environment variable must be set. It is injected automatically by the Igloo provisioner.")
 		return
+	}
+
+	if data.NetworkMonitoring.IsNull() || data.NetworkMonitoring.IsUnknown() {
+		data.NetworkMonitoring = types.BoolValue(false)
 	}
 
 	data.ID = types.StringValue(workspaceID)
 	data.Token = types.StringValue(token)
 	data.ServerURL = types.StringValue(serverURL)
 	data.WorkspaceID = types.StringValue(workspaceID)
-	if data.NetworkMonitoring.IsNull() || data.NetworkMonitoring.IsUnknown() {
-		data.NetworkMonitoring = types.BoolValue(false)
-	}
+	data.InitScript = types.StringValue(buildInitScript(serverURL, token, workspaceID, data.NetworkMonitoring.ValueBool()))
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
@@ -132,16 +142,27 @@ func (r *AgentResource) Read(ctx context.Context, req resource.ReadRequest, resp
 		return
 	}
 
-	// Refresh from env vars each time — values are stable within a provisioning run.
-	if token := os.Getenv("IGLOO_AGENT_TOKEN"); token != "" {
+	token := os.Getenv("IGLOO_AGENT_TOKEN")
+	serverURL := os.Getenv("IGLOO_SERVER_URL")
+	workspaceID := os.Getenv("IGLOO_WORKSPACE_ID")
+
+	if token != "" {
 		data.Token = types.StringValue(token)
 	}
-	if serverURL := os.Getenv("IGLOO_SERVER_URL"); serverURL != "" {
+	if serverURL != "" {
 		data.ServerURL = types.StringValue(serverURL)
 	}
-	if workspaceID := os.Getenv("IGLOO_WORKSPACE_ID"); workspaceID != "" {
+	if workspaceID != "" {
 		data.WorkspaceID = types.StringValue(workspaceID)
 		data.ID = types.StringValue(workspaceID)
+	}
+
+	// Recompute init_script whenever any input changes.
+	t := data.Token.ValueString()
+	s := data.ServerURL.ValueString()
+	w := data.WorkspaceID.ValueString()
+	if t != "" && s != "" && w != "" {
+		data.InitScript = types.StringValue(buildInitScript(s, t, w, data.NetworkMonitoring.ValueBool()))
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
