@@ -90,9 +90,27 @@ export IGLOO_SERVER_URL=%q
 export IGLOO_AGENT_TOKEN=%q
 export IGLOO_WORKSPACE_ID=%q
 export IGLOO_NETMAP_ENABLED=%q
-curl -fsSL "$IGLOO_SERVER_URL/downloads/igloo-agent-linux-amd64" -o /tmp/igloo-agent
-chmod +x /tmp/igloo-agent
-exec /tmp/igloo-agent`, serverURL, token, workspaceID, netmap)
+_url="$IGLOO_SERVER_URL/downloads/igloo-agent-linux-amd64"
+_dest=/tmp/igloo-agent
+_download() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$_url" -o "$_dest"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$_dest" "$_url"
+  elif command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq && apt-get install -y -qq curl
+    curl -fsSL "$_url" -o "$_dest"
+  elif command -v apk >/dev/null 2>&1; then
+    apk add --quiet curl
+    curl -fsSL "$_url" -o "$_dest"
+  else
+    echo "ERROR: no curl, wget, apt-get, or apk found — cannot download igloo agent" >&2
+    exit 1
+  fi
+}
+_download
+chmod +x "$_dest"
+exec "$_dest"`, serverURL, token, workspaceID, netmap)
 }
 
 func (r *AgentResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
