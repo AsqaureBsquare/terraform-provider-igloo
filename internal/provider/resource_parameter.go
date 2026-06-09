@@ -54,7 +54,7 @@ The ` + "`value`" + ` attribute contains the user-supplied value (or the default
 ` + "```hcl\n" + `resource "igloo_parameter" "instance_type" {
   name         = "instance_type"
   display_name = "Instance Type"
-  description  = "The Kubernetes resource profile for this workspace."
+  description  = "The resource profile for this workspace."
   type         = "string"
   default      = "small"
   mutable      = true
@@ -64,19 +64,8 @@ The ` + "`value`" + ` attribute contains the user-supplied value (or the default
     value = "small"
   }
   option {
-    name  = "Medium (1 CPU, 1Gi)"
-    value = "medium"
-  }
-  option {
     name  = "Large (2 CPU, 2Gi)"
     value = "large"
-  }
-}
-
-resource "kubernetes_pod" "workspace" {
-  ...
-  resources {
-    requests = local.profiles[igloo_parameter.instance_type.value].requests
   }
 }
 ` + "```",
@@ -121,10 +110,15 @@ resource "kubernetes_pod" "workspace" {
 				Default:             booldefault.StaticBool(true),
 				MarkdownDescription: "Whether the parameter can be changed after workspace creation. Defaults to true.",
 			},
-			"option": schema.ListNestedAttribute{
-				Optional:            true,
+			"value": schema.StringAttribute{
+				Computed:            true,
+				MarkdownDescription: "The resolved value: user-supplied input or the default.",
+			},
+		},
+		Blocks: map[string]schema.Block{
+			"option": schema.ListNestedBlock{
 				MarkdownDescription: "Allowed values rendered as a dropdown in the UI. When set, the user must pick one of these.",
-				NestedObject: schema.NestedAttributeObject{
+				NestedObject: schema.NestedBlockObject{
 					Attributes: map[string]schema.Attribute{
 						"name": schema.StringAttribute{
 							Required:            true,
@@ -136,10 +130,6 @@ resource "kubernetes_pod" "workspace" {
 						},
 					},
 				},
-			},
-			"value": schema.StringAttribute{
-				Computed:            true,
-				MarkdownDescription: "The resolved value: user-supplied input or the default.",
 			},
 		},
 	}
