@@ -39,6 +39,7 @@ func (p *IglooProvider) Configure(_ context.Context, _ provider.ConfigureRequest
 func (p *IglooProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewAgentResource,
+		NewParameterResource,
 	}
 }
 
